@@ -1,0 +1,8 @@
+.env
+token.json
+darvas_bot.db
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+*.log

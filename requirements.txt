@@ -1,0 +1,9 @@
+fyers-apiv3
+python-telegram-bot>=20.0
+APScheduler
+python-dotenv
+pandas
+plotly
+kaleido
+pytz
+requests
