@@ -155,3 +155,48 @@ def analyze_symbol(df: pd.DataFrame, active_box_state: Optional[dict]) -> Option
         return signal
 
     return None
+
+
+def find_all_boxes_for_chart(df: pd.DataFrame) -> list[dict]:
+    """
+    Walk through the full DataFrame and collect all confirmed Darvas boxes.
+    Returns list of dicts suitable for draw_darvas_chart().
+    """
+    boxes = []
+    seen_highs: set[int] = set()
+
+    for i in range(10, len(df)):
+        slice_df = df.iloc[:i + 1].copy()
+        result = find_52w_high(slice_df)
+        if result is None:
+            continue
+
+        high_idx, high_val = result
+        if high_idx in seen_highs:
+            continue
+
+        confirmed, box_top, box_bottom, confirm_date = confirm_box(slice_df, high_idx)
+        if not confirmed:
+            continue
+
+        seen_highs.add(high_idx)
+        high_date = slice_df.loc[high_idx, "date"]
+
+        # Determine status: broken if a later candle closed below box_bottom
+        status = "confirmed"
+        subsequent = df[df["date"] > confirm_date] if confirm_date else df.iloc[i + 1:]
+        for _, row in subsequent.iterrows():
+            if row["close"] < box_bottom:
+                status = "broken"
+                break
+
+        boxes.append({
+            "box_top": box_top,
+            "box_bottom": box_bottom,
+            "high_date": str(high_date),
+            "confirm_date": str(confirm_date) if confirm_date else str(high_date),
+            "status": status,
+            "signals": [],
+        })
+
+    return boxes

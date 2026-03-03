@@ -25,6 +25,7 @@ import config
 from data.symbols import search_symbol, validate_symbol, format_symbol
 from data.market_data import get_daily_ohlcv
 from data.realtime import get_portfolio_tracker
+from strategy.darvas_engine import find_all_boxes_for_chart
 from state.db_manager import (
     add_to_watchlist,
     remove_from_watchlist,
@@ -217,22 +218,15 @@ async def cmd_chart(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     symbol = format_symbol(ctx.args[0])
     await update.message.reply_text(f"Generating chart for {symbol}…")
     try:
-        df = get_daily_ohlcv(symbol, days=120)
+        df = get_daily_ohlcv(symbol, days=300)
         if df.empty:
             await update.message.reply_text(f"No data for {symbol}.")
             return
-        box = get_active_box(symbol)
-        boxes = []
-        if box:
-            boxes.append({
-                "box_top": box["box_top"],
-                "box_bottom": box["box_bottom"],
-                "high_date": box.get("high_date"),
-                "confirm_date": box.get("confirmed_date"),
-                "status": box.get("status", "confirmed"),
-                "signals": [],
-            })
-        png_bytes = draw_darvas_chart(symbol, df, boxes)
+        # Compute boxes directly from price data — no prior scan needed
+        boxes = find_all_boxes_for_chart(df)
+        # Show only last 120 days on chart but use full data for box detection
+        df_chart = df.tail(120).reset_index(drop=True)
+        png_bytes = draw_darvas_chart(symbol, df_chart, boxes)
         await update.message.reply_photo(
             photo=InputFile(io.BytesIO(png_bytes), filename=f"{symbol}.png"),
             caption=f"Darvas Box Chart — {symbol}",
