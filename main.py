@@ -76,18 +76,21 @@ def run_daily_scan():
             sig_type = signal["type"]
             logger.info(f"{symbol}: {sig_type} @ {signal['price']:.2f}")
 
-            # Persist box state
-            if sig_type in ("BOX_FORMED", "ENTRY", "NEW_HIGH"):
-                high_date = signal.get("date")
-                confirm_date = signal.get("confirm_date")
-                status = "confirmed" if sig_type in ("BOX_FORMED", "ENTRY") else "forming"
+            # Persist box state for all box-related signals
+            if sig_type in ("BOX_FORMED", "BOX_FORMING", "ENTRY"):
+                status_map = {
+                    "ENTRY": "confirmed",
+                    "BOX_FORMED": "confirmed",
+                    "BOX_FORMING": "forming",
+                }
                 upsert_box(
                     symbol=symbol,
                     box_top=signal["box_top"],
                     box_bottom=signal["box_bottom"],
-                    high_date=str(high_date) if high_date else None,
-                    confirmed_date=str(confirm_date) if confirm_date else None,
-                    status=status,
+                    high_date=str(signal.get("date")) if signal.get("date") else None,
+                    confirmed_date=str(signal.get("date")) if sig_type == "ENTRY" else None,
+                    status=status_map[sig_type],
+                    confirm_count=signal.get("confirm_count", 0),
                 )
 
             # Persist signal
@@ -108,7 +111,7 @@ def run_daily_scan():
                 entry_alerts.append((symbol, signal))
             elif sig_type == "EXIT":
                 exit_alerts.append((symbol, signal))
-            elif sig_type == "BOX_FORMED":
+            elif sig_type in ("BOX_FORMED", "BOX_FORMING"):
                 box_alerts.append((symbol, signal))
 
         except Exception as e:

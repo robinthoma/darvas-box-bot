@@ -32,6 +32,7 @@ def init_db():
             box_bottom      REAL NOT NULL,
             high_date       TEXT,
             confirmed_date  TEXT,
+            confirm_count   INTEGER NOT NULL DEFAULT 0,
             status          TEXT NOT NULL DEFAULT 'forming'
         );
 
@@ -95,6 +96,7 @@ def upsert_box(
     high_date: Optional[str],
     confirmed_date: Optional[str],
     status: str,
+    confirm_count: int = 0,
 ) -> int:
     """
     Insert or update the most recent box for a symbol.
@@ -111,15 +113,16 @@ def upsert_box(
         if existing:
             con.execute(
                 "UPDATE boxes SET box_top=?, box_bottom=?, high_date=?, "
-                "confirmed_date=?, status=? WHERE id=?",
-                (box_top, box_bottom, high_date, confirmed_date, status, existing["id"]),
+                "confirmed_date=?, status=?, confirm_count=? WHERE id=?",
+                (box_top, box_bottom, high_date, confirmed_date, status,
+                 confirm_count, existing["id"]),
             )
             return existing["id"]
 
         cur = con.execute(
-            "INSERT INTO boxes(symbol, box_top, box_bottom, high_date, confirmed_date, status) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (symbol, box_top, box_bottom, high_date, confirmed_date, status),
+            "INSERT INTO boxes(symbol, box_top, box_bottom, high_date, confirmed_date, "
+            "status, confirm_count) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (symbol, box_top, box_bottom, high_date, confirmed_date, status, confirm_count),
         )
         return cur.lastrowid
 
