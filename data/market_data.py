@@ -24,8 +24,8 @@ def get_daily_ohlcv(symbol: str, days: int = 300) -> pd.DataFrame:
         "symbol": symbol,
         "resolution": "D",
         "date_format": "1",
-        "range_from": str(int(start_dt.timestamp())),
-        "range_to": str(int(end_dt.timestamp())),
+        "range_from": start_dt.strftime("%Y-%m-%d"),
+        "range_to": end_dt.strftime("%Y-%m-%d"),
         "cont_flag": "1",
     }
 
