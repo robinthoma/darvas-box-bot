@@ -8,52 +8,60 @@ def find_current_box(df: pd.DataFrame) -> Optional[dict]:
     """
     Find the current Darvas box state from full OHLCV history.
 
-    Rules (from chart analysis):
-    - Box Top    = 52-week high (highest high in last 252 candles)
-    - Box Bottom = lowest low from the 52W high date to today (or entry date)
-    - Entry      = 3 consecutive daily closes above Box Top
-    - Expansion  = if price makes a new high before 3 confirms,
-                   update Box Top, reset confirm count, keep tracking lows
-    - Stop Loss  = Box Bottom (locked at the moment of entry confirmation)
+    Rules:
+    - Box Top    = highest candle body top (max(open, close)) in last 252 candles
+    - Box Bottom = lowest candle body bottom (min(open, close)) during consolidation
+    - Entry      = 3 consecutive closes above Box Top
+    - Expansion  = if body top makes new high before 3 confirms,
+                   update Box Top, reset confirm count
+    - Stop Loss  = Box Bottom locked at entry confirmation
 
-    Returns dict or None.
+    Wicks (high/low) are ignored for box construction.
     """
     if len(df) < 10:
         return None
 
     window = min(252, len(df))
-    lookback = df.tail(window)
-    max_high = lookback["high"].max()
+    lookback = df.tail(window).copy()
 
-    # Most recent candle that achieved the 52W high
-    high_mask = lookback["high"] >= max_high
+    # Body top and bottom for each candle
+    lookback["body_top"] = lookback[["open", "close"]].max(axis=1)
+    lookback["body_bot"] = lookback[["open", "close"]].min(axis=1)
+
+    max_body_top = lookback["body_top"].max()
+
+    # Most recent candle whose body top achieved the 52W high
+    high_mask = lookback["body_top"] >= max_body_top
     high_pos = high_mask[high_mask].index[-1]
     high_date = df.loc[high_pos, "date"]
 
-    # All candles from the 52W high onwards
+    # All candles from the 52W high candle onwards
     box_df = df.loc[high_pos:].copy()
+    box_df["body_top"] = box_df[["open", "close"]].max(axis=1)
+    box_df["body_bot"] = box_df[["open", "close"]].min(axis=1)
+
     if len(box_df) < 2:
         return None
 
-    box_top = max_high
-    box_bottom_running = float("inf")   # Tracks lowest low (updates every candle)
+    box_top = max_body_top
+    box_bottom_running = float("inf")   # Lowest body bottom (updates every candle)
     box_bottom_locked = None            # Locked when entry is triggered
     confirm_count = 0
     entry_triggered = False
     entry_date = None
 
     for i, (idx, row) in enumerate(box_df.iterrows()):
-        # Track lowest low throughout the period
-        box_bottom_running = min(box_bottom_running, row["low"])
+        # Track lowest body bottom throughout the period
+        box_bottom_running = min(box_bottom_running, row["body_bot"])
 
         if i == 0:
             # The 52W high candle itself — initialise only
             continue
 
         if not entry_triggered:
-            # Expand box if new high made before entry confirmed
-            if row["high"] > box_top:
-                box_top = row["high"]
+            # Expand box if new body high made before entry confirmed
+            if row["body_top"] > box_top:
+                box_top = row["body_top"]
                 confirm_count = 0   # Reset — must see 3 fresh consecutive closes
 
             # Count consecutive closes above box top

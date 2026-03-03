@@ -42,11 +42,12 @@ def run_backtest(symbol: str, days: int = 504) -> BacktestResult:
     Walk-forward backtest using corrected Darvas box logic.
 
     Rules applied:
-    - Box Top    = 52W high
-    - Box Bottom = lowest low of entire consolidation (locked at entry)
+    - Box Top    = highest candle body top (max(open,close)) in 52W window
+    - Box Bottom = lowest candle body bottom (min(open,close)) during consolidation
     - Entry      = 3 consecutive closes above Box Top
-    - Expansion  = new high before 3 confirms → expand, reset count
+    - Expansion  = new body high before 3 confirms → expand, reset count
     - Exit       = close below Box Bottom (stop loss)
+    - Wicks (high/low) are ignored for box construction.
     """
     df = get_daily_ohlcv(symbol, days=days)
     result = BacktestResult(symbol=symbol)
@@ -81,19 +82,24 @@ def run_backtest(symbol: str, days: int = 504) -> BacktestResult:
         row = df.iloc[i]
         prev = df.iloc[i - 1]
 
-        # Rolling 52W high detection
+        # Body top/bottom (ignore wicks)
+        body_top = max(row["open"], row["close"])
+        body_bot = min(row["open"], row["close"])
+
+        # Rolling 52W body-top high detection
         lookback_start = max(0, i - 251)
-        rolling_max = df.iloc[lookback_start:i + 1]["high"].max()
+        slice_ = df.iloc[lookback_start:i + 1]
+        rolling_max = slice_[["open", "close"]].max(axis=1).max()
 
-        # Initialise or expand box on new 52W high (only when NOT in position)
+        # Initialise or expand box on new 52W body high (only when NOT in position)
         if not in_position:
-            if box_top is None or row["high"] >= rolling_max:
-                if box_top is None or row["high"] > box_top:
-                    box_top = row["high"]
-                    confirm_count = 0  # Reset confirmation on new high
+            if box_top is None or body_top >= rolling_max:
+                if box_top is None or body_top > box_top:
+                    box_top = body_top
+                    confirm_count = 0  # Reset confirmation on new body high
 
-            # Track lowest low during consolidation
-            box_bottom_running = min(box_bottom_running, row["low"])
+            # Track lowest body bottom during consolidation
+            box_bottom_running = min(box_bottom_running, body_bot)
 
             # Count consecutive closes above box top
             if box_top and row["close"] > box_top:
