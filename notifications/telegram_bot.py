@@ -12,6 +12,7 @@ from telegram import (
     InlineKeyboardMarkup,
     Update,
 )
+from telegram.request import HTTPXRequest
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -494,9 +495,24 @@ async def _post_init(app: Application):
 
 
 def build_app() -> Application:
+    request = HTTPXRequest(
+        connect_timeout=30,
+        read_timeout=30,
+        write_timeout=30,
+        pool_timeout=30,
+    )
+    # Separate request object for long-polling (needs higher read_timeout)
+    get_updates_request = HTTPXRequest(
+        connect_timeout=30,
+        read_timeout=35,
+        write_timeout=30,
+        pool_timeout=30,
+    )
     app = (
         Application.builder()
         .token(config.TELEGRAM_BOT_TOKEN)
+        .request(request)
+        .get_updates_request(get_updates_request)
         .post_init(_post_init)
         .build()
     )

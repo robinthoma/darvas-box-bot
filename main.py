@@ -176,9 +176,19 @@ def main():
     scheduler.start()
     logger.info(f"Scheduler started — daily scan at {config.EVAL_TIME} IST (Mon–Fri)")
 
-    # 5. Run Telegram bot (blocking)
-    logger.info("Starting Telegram polling…")
-    _tg_app.run_polling(drop_pending_updates=True)
+    # 5. Run Telegram bot (blocking, auto-retry on network errors)
+    import time as _time
+    while True:
+        try:
+            logger.info("Starting Telegram polling…")
+            _tg_app.run_polling(drop_pending_updates=True)
+            break  # clean shutdown (Ctrl+C)
+        except Exception as e:
+            logger.error(f"Polling crashed: {e}. Retrying in 10 seconds…")
+            _time.sleep(10)
+            # Rebuild app for clean reconnect
+            _tg_app = build_app()
+            set_scan_callback(run_daily_scan)
 
 
 if __name__ == "__main__":
