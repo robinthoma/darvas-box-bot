@@ -29,6 +29,7 @@ from notifications.telegram_bot import (
     send_exit_alert,
     send_box_alert,
     send_daily_summary,
+    get_main_loop,
 )
 
 logging.basicConfig(
@@ -121,9 +122,6 @@ def run_daily_scan():
         logger.warning("Telegram app not ready, skipping notifications.")
         return
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
     async def _send_all():
         for symbol, sig in entry_alerts:
             await send_entry_alert(_tg_app, symbol, sig)
@@ -133,10 +131,13 @@ def run_daily_scan():
             await send_box_alert(_tg_app, symbol, sig)
         await send_daily_summary(_tg_app, len(entry_alerts), len(exit_alerts))
 
-    try:
-        loop.run_until_complete(_send_all())
-    finally:
-        loop.close()
+    main_loop = get_main_loop()
+    if main_loop:
+        future = asyncio.run_coroutine_threadsafe(_send_all(), main_loop)
+        try:
+            future.result(timeout=120)
+        except Exception as e:
+            logger.error(f"Alert sending error: {e}")
 
     logger.info(
         f"Scan complete: {len(entry_alerts)} entries, {len(exit_alerts)} exits, "

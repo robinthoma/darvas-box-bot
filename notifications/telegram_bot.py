@@ -53,6 +53,11 @@ logger = logging.getLogger(__name__)
 # Injected by main.py
 _scan_callback = None
 _paused = False
+_main_loop = None  # Captured in _post_init for cross-thread async calls
+
+
+def get_main_loop():
+    return _main_loop
 _last_scan_time = "Never"
 
 # Pending buy confirmations: {order_id: {symbol, qty, price, box_bottom, ts}}
@@ -94,8 +99,8 @@ async def cmd_watchlist(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not symbols:
         await update.message.reply_text("Watchlist is empty. Use /add SYMBOL to add stocks.")
         return
-    lines = ["📋 *Watchlist*", ""] + [f"• {s}" for s in symbols]
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    lines = ["📋 <b>Watchlist</b>", ""] + [f"• {s}" for s in symbols]
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 @authorized
@@ -108,8 +113,8 @@ async def cmd_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     formatted = format_symbol(query)
     add_to_watchlist(formatted)
     await update.message.reply_text(
-        f"✅ Added *{formatted}* to watchlist.",
-        parse_mode=ParseMode.MARKDOWN,
+        f"✅ Added <b>{formatted}</b> to watchlist.",
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -121,7 +126,7 @@ async def cmd_remove(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     symbol = format_symbol(ctx.args[0])
     remove_from_watchlist(symbol)
     await update.message.reply_text(
-        f"Removed *{symbol}* from watchlist.", parse_mode=ParseMode.MARKDOWN
+        f"Removed <b>{symbol}</b> from watchlist.", parse_mode=ParseMode.HTML
     )
 
 
@@ -131,12 +136,13 @@ async def cmd_signals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not signals:
         await update.message.reply_text("No signals today.")
         return
-    lines = [f"📡 *Today's Signals ({date.today().isoformat()})*", ""]
+    lines = [f"📡 <b>Today's Signals ({date.today().isoformat()})</b>", ""]
     for s in signals:
+        details = (s['details'] or '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
         lines.append(
-            f"• {s['signal_type']} {s['symbol']} @ ₹{s['price']:.2f} — {s['details'] or ''}"
+            f"• {s['signal_type']} {s['symbol']} @ ₹{s['price']:.2f} — {details}"
         )
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 @authorized
@@ -145,12 +151,12 @@ async def cmd_boxes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not boxes:
         await update.message.reply_text("No confirmed boxes active.")
         return
-    lines = ["📦 *Active Confirmed Boxes*", ""]
+    lines = ["📦 <b>Active Confirmed Boxes</b>", ""]
     for b in boxes:
         lines.append(
-            f"• *{b['symbol']}* — Top ₹{b['box_top']:.2f} | Bottom ₹{b['box_bottom']:.2f}"
+            f"• <b>{b['symbol']}</b> — Top ₹{b['box_top']:.2f} | Bottom ₹{b['box_bottom']:.2f}"
         )
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 @authorized
@@ -159,13 +165,13 @@ async def cmd_positions(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not positions:
         await update.message.reply_text("No open positions tracked.")
         return
-    lines = ["💼 *Open Positions*", ""]
+    lines = ["💼 <b>Open Positions</b>", ""]
     for p in positions:
         lines.append(
-            f"• *{p['symbol']}* — {p['quantity']} qty @ ₹{p['entry_price']:.2f} "
+            f"• <b>{p['symbol']}</b> — {p['quantity']} qty @ ₹{p['entry_price']:.2f} "
             f"(Level {p['pyramid_level']}) — {p['entry_date']}"
         )
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 @authorized
@@ -174,11 +180,11 @@ async def cmd_portfolio(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         tracker = get_portfolio_tracker()
         snapshot = tracker.get_portfolio_snapshot()
-        lines = ["💰 *Portfolio Snapshot*", ""]
+        lines = ["💰 <b>Portfolio Snapshot</b>", ""]
 
         holdings = snapshot.get("holdings", [])
         if holdings:
-            lines.append("*Holdings:*")
+            lines.append("<b>Holdings:</b>")
             for h in holdings:
                 lines.append(
                     f"  {h.get('symbol','?')} | {h.get('quantity',0)} qty | "
@@ -189,7 +195,7 @@ async def cmd_portfolio(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         positions = snapshot.get("positions", [])
         if positions:
-            lines.append("*Positions:*")
+            lines.append("<b>Positions:</b>")
             for p in positions:
                 lines.append(
                     f"  {p.get('symbol','?')} | {p.get('netQty',0)} qty | "
@@ -199,12 +205,12 @@ async def cmd_portfolio(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             lines.append("")
 
         total_pnl = snapshot.get("total_pnl", 0)
-        lines.append(f"*Total P&L: ₹{total_pnl:+,.0f}*")
+        lines.append(f"<b>Total P&L: ₹{total_pnl:+,.0f}</b>")
 
         if not holdings and not positions:
             lines.append("No holdings or positions found.")
 
-        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
     except Exception as e:
         logger.error(f"Portfolio error: {e}")
         await update.message.reply_text(f"Error fetching portfolio: {e}")
@@ -246,7 +252,7 @@ async def cmd_backtest(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         result = run_backtest(symbol, days=504)
         report = format_backtest_report(result)
-        await update.message.reply_text(report, parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(report, parse_mode=ParseMode.HTML)
     except Exception as e:
         logger.error(f"Backtest error: {e}")
         await update.message.reply_text(f"Error: {e}")
@@ -265,12 +271,12 @@ async def cmd_setscreen(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if is_screener_url(value):
         await update.message.reply_text(
             f"✅ Screener URL saved. Run /screen to fetch stocks.",
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.HTML,
         )
     else:
         await update.message.reply_text(
             f"✅ Screener query saved:\n`{value}`",
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.HTML,
         )
 
 
@@ -285,7 +291,7 @@ async def cmd_screen(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"🔍 Screening Screener.in…\n`{query}`",
-        parse_mode=ParseMode.MARKDOWN,
+        parse_mode=ParseMode.HTML,
     )
 
     try:
@@ -296,9 +302,9 @@ async def cmd_screen(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except RuntimeError as e:
         if "LOGIN_REQUIRED" in str(e):
             await update.message.reply_text(
-                "⚠️ *Screener.in requires login* for this screen.\n"
+                "⚠️ <b>Screener.in requires login</b> for this screen.\n"
                 "Try using a public saved screen URL with /setscreen.",
-                parse_mode=ParseMode.MARKDOWN,
+                parse_mode=ParseMode.HTML,
             )
         else:
             await update.message.reply_text(f"❌ Screener.in error: {e}")
@@ -314,13 +320,13 @@ async def cmd_screen(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     watchlist = set(get_watchlist())
-    lines = [f"📊 *Screen Results* ({len(results)} stocks)\n"]
+    lines = [f"📊 <b>Screen Results</b> ({len(results)} stocks)\n"]
     keyboard_rows = []
 
     for r in results[:15]:
         sym = r["nse_symbol"]
         status = "✅" if sym in watchlist else "➕"
-        lines.append(f"{status} *{r['screener_symbol']}* — {r['name']}")
+        lines.append(f"{status} <b>{r['screener_symbol']}</b> — {r['name']}")
         if sym not in watchlist:
             keyboard_rows.append([
                 InlineKeyboardButton(
@@ -343,7 +349,7 @@ async def cmd_screen(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     keyboard = InlineKeyboardMarkup(keyboard_rows) if keyboard_rows else None
     await update.message.reply_text(
         "\n".join(lines),
-        parse_mode=ParseMode.MARKDOWN,
+        parse_mode=ParseMode.HTML,
         reply_markup=keyboard,
     )
 
@@ -381,14 +387,14 @@ async def cmd_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     status = "⏸ PAUSED" if _paused else "▶️ RUNNING"
     lines = [
-        "🤖 *Bot Status*", "",
+        "🤖 <b>Bot Status</b>", "",
         f"State: {status}",
         f"Watchlist: {len(get_watchlist())} symbols",
         f"Open positions: {len(get_open_positions())}",
         f"Last scan: {_last_scan_time}",
         f"Auto-scan: {config.EVAL_TIME} IST Mon–Fri",
     ]
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 # ── Buy confirmation callback ──────────────────────────────────────────────
@@ -429,10 +435,10 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     entry_date=date.today().isoformat(),
                 )
                 await query.message.reply_text(
-                    f"✅ *Buy order placed!*\n"
+                    f"✅ <b>Buy order placed!</b>\n"
                     f"{order['symbol']} — {order['qty']} shares @ market\n"
                     f"Fyers Order ID: `{fyers_order_id}`",
-                    parse_mode=ParseMode.MARKDOWN,
+                    parse_mode=ParseMode.HTML,
                 )
             else:
                 await query.message.reply_text(
@@ -500,11 +506,11 @@ async def send_entry_alert(app: Application, symbol: str, signal: dict):
     }
 
     text = (
-        f"🚨 *ENTRY SIGNAL — {symbol}*\n"
-        f"Price: ₹{price:,.2f} \\(+{pct_above:.2f}% above ₹{box_top:,.2f}\\)\n"
+        f"🚨 <b>ENTRY SIGNAL — {symbol}</b>\n"
+        f"Price: ₹{price:,.2f} (+{pct_above:.2f}% above ₹{box_top:,.2f})\n"
         f"Volume: {vol_icon} {vol_ratio:.1f}x prev day\n"
         f"Box: ₹{box_top:,.2f} → ₹{box_bottom:,.2f}\n"
-        f"Qty: {qty} shares \\(₹{config.CAPITAL_PER_TRADE:,} allocation\\)\n"
+        f"Qty: {qty} shares (₹{config.CAPITAL_PER_TRADE:,} allocation)\n"
         f"Stop Loss: ₹{box_bottom:,.2f}\n\n"
         f"⏳ Expires in 5 minutes"
     )
@@ -517,7 +523,7 @@ async def send_entry_alert(app: Application, symbol: str, signal: dict):
     await app.bot.send_message(
         chat_id=config.TELEGRAM_CHAT_ID,
         text=text,
-        parse_mode=ParseMode.MARKDOWN_V2,
+        parse_mode=ParseMode.HTML,
         reply_markup=keyboard,
     )
 
@@ -529,7 +535,7 @@ async def send_exit_alert(app: Application, symbol: str, signal: dict):
     qty = sum(p["quantity"] for p in positions if p["symbol"] == symbol)
 
     text = (
-        f"⚠️ *EXIT SIGNAL — {symbol}*\n"
+        f"⚠️ <b>EXIT SIGNAL — {symbol}</b>\n"
         f"Price: ₹{price:,.2f} < Box Bottom ₹{box_bottom:,.2f}\n"
         f"Action: SELL {qty} shares\n\n"
         f"_Delivery shares require CDSL TPIN authorisation on Fyers app before selling._"
@@ -542,7 +548,7 @@ async def send_exit_alert(app: Application, symbol: str, signal: dict):
     await app.bot.send_message(
         chat_id=config.TELEGRAM_CHAT_ID,
         text=text,
-        parse_mode=ParseMode.MARKDOWN,
+        parse_mode=ParseMode.HTML,
         reply_markup=keyboard,
     )
 
@@ -552,14 +558,14 @@ async def send_box_alert(app: Application, symbol: str, signal: dict):
     box_bottom = signal.get("box_bottom", 0)
     breakout_level = box_top * (1 + config.BREAKOUT_BUFFER)
     text = (
-        f"📦 *BOX CONFIRMED — {symbol}*\n"
+        f"📦 <b>BOX CONFIRMED — {symbol}</b>\n"
         f"Top: ₹{box_top:,.2f} | Bottom: ₹{box_bottom:,.2f}\n"
         f"Watch breakout above ₹{breakout_level:,.2f}"
     )
     await app.bot.send_message(
         chat_id=config.TELEGRAM_CHAT_ID,
         text=text,
-        parse_mode=ParseMode.MARKDOWN,
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -567,21 +573,23 @@ async def send_daily_summary(app: Application, entry_count: int, exit_count: int
     boxes = get_all_confirmed_boxes()
     positions = get_open_positions()
     text = (
-        f"📊 *DAILY SUMMARY — {config.EVAL_TIME} IST*\n"
+        f"📊 <b>DAILY SUMMARY — {config.EVAL_TIME} IST</b>\n"
         f"Signals today: {entry_count} entry, {exit_count} exit\n"
         f"Active boxes: {len(boxes)} | Open positions: {len(positions)}"
     )
     await app.bot.send_message(
         chat_id=config.TELEGRAM_CHAT_ID,
         text=text,
-        parse_mode=ParseMode.MARKDOWN,
+        parse_mode=ParseMode.HTML,
     )
 
 
 # ── App builder ────────────────────────────────────────────────────────────
 
 async def _post_init(app: Application):
-    """Register bot command menu shown in Telegram."""
+    """Capture main event loop and register bot command menu."""
+    global _main_loop
+    _main_loop = asyncio.get_running_loop()
     commands = [
         BotCommand("watchlist",  "List tracked symbols"),
         BotCommand("add",        "Add symbol — /add RELIANCE"),
