@@ -25,11 +25,10 @@ from notifications.telegram_bot import (
     set_scan_callback,
     set_last_scan_time,
     is_paused,
-    send_alert,
-    format_entry_alert,
-    format_exit_alert,
-    format_box_alert,
-    format_daily_summary,
+    send_entry_alert,
+    send_exit_alert,
+    send_box_alert,
+    send_daily_summary,
 )
 
 logging.basicConfig(
@@ -127,22 +126,12 @@ def run_daily_scan():
 
     async def _send_all():
         for symbol, sig in entry_alerts:
-            await send_alert(_tg_app, format_entry_alert(symbol, sig))
+            await send_entry_alert(_tg_app, symbol, sig)
         for symbol, sig in exit_alerts:
-            await send_alert(_tg_app, format_exit_alert(symbol, sig))
+            await send_exit_alert(_tg_app, symbol, sig)
         for symbol, sig in box_alerts:
-            await send_alert(_tg_app, format_box_alert(symbol, sig))
-
-        # Daily summary
-        confirmed_boxes = get_all_confirmed_boxes()
-        open_positions = get_open_positions()
-        summary = format_daily_summary(
-            entry_count=len(entry_alerts),
-            exit_count=len(exit_alerts),
-            box_count=len(confirmed_boxes),
-            position_count=len(open_positions),
-        )
-        await send_alert(_tg_app, summary)
+            await send_box_alert(_tg_app, symbol, sig)
+        await send_daily_summary(_tg_app, len(entry_alerts), len(exit_alerts))
 
     try:
         loop.run_until_complete(_send_all())
