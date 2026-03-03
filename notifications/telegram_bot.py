@@ -34,9 +34,18 @@ from state.db_manager import (
     get_today_signals,
     get_open_positions,
     add_position,
+    get_setting,
+    set_setting,
 )
 from strategy.backtester import run_backtest, format_backtest_report
 from visualisation.chart import draw_darvas_chart
+from data.screener import fetch_screener_results, fetch_screen_by_url, build_screener_url, is_screener_url
+
+DEFAULT_SCREEN_QUERY = (
+    "Market Capitalization > 100000 AND "
+    "Down from 52w high < 85 AND "
+    "Price to Earning > 20"
+)
 
 logger = logging.getLogger(__name__)
 
@@ -96,34 +105,11 @@ async def cmd_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     query = ctx.args[0].upper()
     formatted = format_symbol(query)
-
-    if validate_symbol(formatted):
-        add_to_watchlist(formatted)
-        await update.message.reply_text(
-            f"✅ Added *{formatted}* to watchlist.", parse_mode=ParseMode.MARKDOWN
-        )
-        return
-
-    results = search_symbol(query)
-    if not results:
-        await update.message.reply_text(
-            f"❌ Symbol `{query}` not found on NSE.", parse_mode=ParseMode.MARKDOWN
-        )
-        return
-
-    if len(results) == 1:
-        sym = results[0]["symbol"]
-        add_to_watchlist(sym)
-        await update.message.reply_text(
-            f"✅ Added *{sym}* to watchlist.", parse_mode=ParseMode.MARKDOWN
-        )
-        return
-
-    lines = [f"Multiple results for `{query}`:"]
-    for i, r in enumerate(results[:5], 1):
-        lines.append(f"{i}. *{r['symbol']}* — {r['name']}")
-    lines.append("\nUse full symbol e.g. /add NSE:RELIANCE-EQ")
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    add_to_watchlist(formatted)
+    await update.message.reply_text(
+        f"✅ Added *{formatted}* to watchlist.",
+        parse_mode=ParseMode.MARKDOWN,
+    )
 
 
 @authorized
@@ -273,6 +259,102 @@ async def cmd_backtest(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 @authorized
+async def cmd_setscreen(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Save a Screener.in URL or query. Usage: /setscreen URL_OR_QUERY"""
+    if ctx.args:
+        value = " ".join(ctx.args)
+    else:
+        value = DEFAULT_SCREEN_QUERY
+
+    set_setting("screener_query", value)
+
+    if is_screener_url(value):
+        await update.message.reply_text(
+            f"✅ Screener URL saved. Run /screen to fetch stocks.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+    else:
+        await update.message.reply_text(
+            f"✅ Screener query saved:\n`{value}`",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+
+
+@authorized
+async def cmd_screen(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Run the saved Screener.in query and show matching stocks."""
+    # Allow inline query override: /screen YOUR QUERY
+    if ctx.args:
+        query = " ".join(ctx.args)
+    else:
+        query = get_setting("screener_query", DEFAULT_SCREEN_QUERY)
+
+    await update.message.reply_text(
+        f"🔍 Screening Screener.in…\n`{query}`",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+    try:
+        if is_screener_url(query):
+            results = fetch_screen_by_url(query)
+        else:
+            results = fetch_screener_results(query, limit=20)
+    except RuntimeError as e:
+        if "LOGIN_REQUIRED" in str(e):
+            await update.message.reply_text(
+                "⚠️ *Screener.in requires login* for this screen.\n"
+                "Try using a public saved screen URL with /setscreen.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        else:
+            await update.message.reply_text(f"❌ Screener.in error: {e}")
+        return
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+        return
+
+    if not results:
+        await update.message.reply_text(
+            "No results found. Check your query or URL."
+        )
+        return
+
+    watchlist = set(get_watchlist())
+    lines = [f"📊 *Screen Results* ({len(results)} stocks)\n"]
+    keyboard_rows = []
+
+    for r in results[:15]:
+        sym = r["nse_symbol"]
+        status = "✅" if sym in watchlist else "➕"
+        lines.append(f"{status} *{r['screener_symbol']}* — {r['name']}")
+        if sym not in watchlist:
+            keyboard_rows.append([
+                InlineKeyboardButton(
+                    f"➕ {r['screener_symbol']}",
+                    callback_data=f"sadd_{r['screener_symbol']}",
+                )
+            ])
+
+    # Add "Add All" button if there are stocks not yet in watchlist
+    new_symbols = [r for r in results[:15] if r["nse_symbol"] not in watchlist]
+    if new_symbols:
+        all_syms = ",".join(r["screener_symbol"] for r in new_symbols[:10])
+        keyboard_rows.append([
+            InlineKeyboardButton(
+                f"➕ Add All ({len(new_symbols)})",
+                callback_data=f"saddall_{all_syms}",
+            )
+        ])
+
+    keyboard = InlineKeyboardMarkup(keyboard_rows) if keyboard_rows else None
+    await update.message.reply_text(
+        "\n".join(lines),
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=keyboard,
+    )
+
+
+@authorized
 async def cmd_scan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if _scan_callback is None:
         await update.message.reply_text("Scan not configured.")
@@ -371,6 +453,36 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         _pending_orders.pop(order_id, None)
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text("Signal skipped.")
+
+    elif data.startswith("sadd_"):
+        sym_raw = data[5:]
+        nse_sym = f"NSE:{sym_raw}-EQ"
+        add_to_watchlist(nse_sym)
+        await query.answer(f"Added {sym_raw} to watchlist")
+        # Remove just this button row from the keyboard
+        existing = query.message.reply_markup
+        if existing:
+            new_rows = [
+                row for row in existing.inline_keyboard
+                if not any(btn.callback_data == data for btn in row)
+            ]
+            await query.edit_message_reply_markup(
+                reply_markup=InlineKeyboardMarkup(new_rows) if new_rows else None
+            )
+
+    elif data.startswith("saddall_"):
+        syms_raw = data[8:].split(",")
+        added = []
+        for sym in syms_raw:
+            sym = sym.strip()
+            if sym:
+                add_to_watchlist(f"NSE:{sym}-EQ")
+                added.append(sym)
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text(
+            f"✅ Added {len(added)} stocks to watchlist:\n" +
+            ", ".join(added)
+        )
 
 
 # ── Alert senders (called from main.py scan) ───────────────────────────────
@@ -486,6 +598,8 @@ async def _post_init(app: Application):
         BotCommand("portfolio",  "Live portfolio & P&L"),
         BotCommand("chart",      "Darvas chart — /chart RELIANCE"),
         BotCommand("backtest",   "Backtest — /backtest RELIANCE"),
+        BotCommand("screen",     "Screen stocks from Screener.in"),
+        BotCommand("setscreen",  "Save screener query"),
         BotCommand("scan",       "Run manual scan now"),
         BotCommand("pause",      "Pause daily scan"),
         BotCommand("resume",     "Resume daily scan"),
@@ -526,6 +640,8 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("portfolio", cmd_portfolio))
     app.add_handler(CommandHandler("chart",     cmd_chart))
     app.add_handler(CommandHandler("backtest",  cmd_backtest))
+    app.add_handler(CommandHandler("screen",    cmd_screen))
+    app.add_handler(CommandHandler("setscreen", cmd_setscreen))
     app.add_handler(CommandHandler("scan",      cmd_scan))
     app.add_handler(CommandHandler("pause",     cmd_pause))
     app.add_handler(CommandHandler("resume",    cmd_resume))

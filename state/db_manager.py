@@ -57,6 +57,11 @@ def init_db():
             details     TEXT,
             created_at  TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
         """)
 
 
@@ -196,4 +201,21 @@ def close_position(position_id: int, exit_price: float, exit_date: str):
         con.execute(
             "UPDATE positions SET status='closed', exit_price=?, exit_date=? WHERE id=?",
             (exit_price, exit_date, position_id),
+        )
+
+
+# ── Settings ───────────────────────────────────────────────────────────────
+
+def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
+    with _conn() as con:
+        row = con.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_setting(key: str, value: str):
+    with _conn() as con:
+        con.execute(
+            "INSERT INTO settings(key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
         )

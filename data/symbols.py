@@ -14,17 +14,15 @@ def format_symbol(raw: str) -> str:
 
 
 def search_symbol(query: str) -> list[dict]:
-    """Search for symbols matching query. Returns list of {symbol, name} dicts."""
-    fyers = get_fyers_instance()
-    response = fyers.search(data={"symbol": query.upper(), "exchange": "NSE"})
-    if response.get("s") != "ok":
-        return []
-    results = response.get("data", [])
-    return [
-        {"symbol": item.get("symbol", ""), "name": item.get("desc", "")}
-        for item in results
-        if item.get("symbol", "").endswith("-EQ")
-    ]
+    """
+    Try to find a matching NSE equity symbol.
+    Fyers API has no search endpoint, so we validate the formatted symbol directly.
+    Returns a list with one match if found, empty list otherwise.
+    """
+    sym = format_symbol(query)
+    if validate_symbol(sym):
+        return [{"symbol": sym, "name": sym}]
+    return []
 
 
 def validate_symbol(symbol: str) -> bool:
